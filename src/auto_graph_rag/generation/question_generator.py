@@ -215,8 +215,6 @@ Output as JSON array.""")
         node_types = list(schema.get("nodes", {}).keys())
         edge_types = list(schema.get("edges", {}).keys())
         
-        print(f"DEBUG: LLM prompt will use node_types: {node_types}")
-        print(f"DEBUG: LLM prompt will use edge_types: {edge_types}")
         
         formatted_messages = prompt.format_messages(
             batch_size=batch_size,
@@ -228,7 +226,6 @@ Output as JSON array.""")
             edge_types=", ".join(edge_types) if edge_types else "No edge types defined"
         )
         
-        print(f"DEBUG: LLM prompt (first 500 chars): {str(formatted_messages[1].content)[:500]}...")
         
         response = self.llm.invoke(formatted_messages)
         
@@ -339,7 +336,7 @@ Output as JSON array.""")
             # Query failed - return error details
             error_msg = str(e)
             print(f"DEBUG: Invalid query: {cypher[:100]}...")
-            print(f"DEBUG: Error: {error_msg}")
+            print(f"DEBUG: Error: git{error_msg}")
             return False, None, error_msg
     
     def _extract_patterns(self, cypher: str) -> List[str]:
