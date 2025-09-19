@@ -246,13 +246,39 @@ Analyze these node types:""")
             # Sample data for this group
             group_samples = {}
             for edge_name in edge_names:
-                query = f"MATCH (a)-[r:{edge_name}]->(b) RETURN '{edge_name}' as rel_type, labels(a)[0] as src, labels(b)[0] as tgt LIMIT {min(2, max_samples)}"
+                # Get actual relationship instances with node names
+                query = f"MATCH (a)-[r:{edge_name}]->(b) RETURN a.name as source_name, '{edge_name}' as rel_type, b.name as target_name, r as rel_data LIMIT {min(3, max_samples)}"
                 try:
                     results = kuzu_adapter.execute_cypher(query)
-                    group_samples[edge_name] = results[:2]
+                    if results:
+                        # Format examples for readability
+                        examples = []
+                        for result in results:
+                            source = result.get('source_name', 'Unknown')
+                            target = result.get('target_name', 'Unknown')
+                            rel_data = result.get('rel_data', {})
+                            # Extract any properties from the relationship data
+                            if rel_data and isinstance(rel_data, dict) and len(rel_data) > 0:
+                                # Filter out internal fields if any
+                                prop_items = {k: v for k, v in rel_data.items() if not k.startswith('_')}
+                                if prop_items:
+                                    prop_str = f" {prop_items}"
+                                    examples.append(f"{source} --[{edge_name}{prop_str}]--> {target}")
+                                else:
+                                    examples.append(f"{source} --[{edge_name}]--> {target}")
+                            else:
+                                examples.append(f"{source} --[{edge_name}]--> {target}")
+                        group_samples[edge_name] = {
+                            "type": edge_name,
+                            "count": len(results),
+                            "examples": examples,
+                            "sample_relationships": results[:3]  # Include raw data for LLM analysis
+                        }
+                    else:
+                        group_samples[edge_name] = {"type": edge_name, "count": 0, "examples": []}
                 except Exception as e:
                     print(f"Failed to sample {edge_name}: {e}")
-                    group_samples[edge_name] = []
+                    group_samples[edge_name] = {"type": edge_name, "count": 0, "examples": [], "error": str(e)}
             
             # Analyze this group
             if group_samples:
@@ -316,8 +342,16 @@ For each relationship, determine:
 1. What it represents in international relations
 2. Source and target node types
 3. Cardinality (one-to-many, many-to-many, etc.)
+4. Properties (if any)
+5. Concrete examples from the sample data provided
 
-Return JSON with actual relationship names as keys."""
+IMPORTANT: 
+- Always include the "examples" field with actual relationship instances from the sample data
+- Return ONLY valid JSON format - no text before or after
+- Use double quotes for all strings
+- Include all required fields for each relationship
+
+Return a JSON object where each key is a relationship name and the value contains: description, source, target, cardinality, properties (array), examples (array of strings)."""
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
@@ -338,13 +372,24 @@ Analyze these relationships:""")
         
         try:
             import re
-            json_match = re.search(r'\{.*\}', result.content, re.DOTALL)
+            content = result.content.strip()
+            print(f"DEBUG: LLM response for {group_name}: {content[:500]}...")
+            
+            # Try to find the complete JSON object in the response (including nested objects)
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
-                return json.loads(json_match.group())
+                json_str = json_match.group()
+                print(f"DEBUG: Extracted JSON length: {len(json_str)} chars")
+                print(f"DEBUG: Extracted JSON start: {json_str[:200]}...")
+                return json.loads(json_str)
+            else:
+                # If no JSON found, try parsing the entire content as JSON
+                print(f"DEBUG: No JSON object found, trying to parse entire content as JSON")
+                return json.loads(content)
         except Exception as e:
-            raise RuntimeError(f"Failed to parse edge group analysis for {group_name}: {e}")
-        
-        raise RuntimeError(f"Could not parse LLM response for edge group {group_name}")
+            print(f"ERROR: Failed to parse JSON for {group_name}: {e}")
+            print(f"ERROR: Full LLM response: {content}")
+            raise RuntimeError(f"Failed to parse edge group analysis for {group_name}. LLM did not return valid JSON format. Error: {e}")
     
     def _synthesize_final_schema(self, schema_overview, node_schemas, edge_schemas) -> Dict[str, Any]:
         """Synthesize final comprehensive schema."""
