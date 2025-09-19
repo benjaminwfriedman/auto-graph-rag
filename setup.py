@@ -42,6 +42,7 @@ setup(
         "langchain>=0.2.0",
         "langchain-openai>=0.1.0",
         "python-dotenv>=1.0.0",
+        "pykeen"
     ],
     extras_require={
         "dev": [
