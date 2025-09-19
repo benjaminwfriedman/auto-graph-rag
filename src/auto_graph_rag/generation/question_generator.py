@@ -71,12 +71,15 @@ class QuestionGenerator:
         
         # Generate for each complexity level
         for complexity, count in complexity_counts.items():
+            print(f"DEBUG: Generating {count} examples for complexity {complexity}")
             remaining = count
             attempts = 0
             max_attempts = count * 3  # Allow retries for failed queries
             
             while remaining > 0 and attempts < max_attempts:
                 current_batch = min(batch_size, remaining)
+                print(f"DEBUG: Generating batch of {current_batch}, remaining={remaining}, attempts={attempts}")
+                
                 batch = self._generate_batch(
                     schema, 
                     complexity, 
@@ -85,9 +88,12 @@ class QuestionGenerator:
                     include_results
                 )
                 
+                print(f"DEBUG: Generated batch with {len(batch)} examples")
+                
                 # Filter out invalid queries if validation is enabled
                 if validate_queries:
                     valid_batch = [p for p in batch if p.get("is_valid", True)]
+                    print(f"DEBUG: {len(valid_batch)} examples passed validation")
                     all_pairs.extend(valid_batch)
                     remaining -= len(valid_batch)
                 else:
@@ -95,6 +101,10 @@ class QuestionGenerator:
                     remaining -= len(batch)
                 
                 attempts += current_batch
+                
+                if len(batch) == 0:
+                    print(f"DEBUG: Empty batch generated, breaking to avoid infinite loop")
+                    break
         
         return all_pairs
     
@@ -205,17 +215,22 @@ Output as JSON array.""")
         node_types = list(schema.get("nodes", {}).keys())
         edge_types = list(schema.get("edges", {}).keys())
         
-        response = self.llm.invoke(
-            prompt.format_messages(
-                batch_size=batch_size,
-                complexity=complexity,
-                complexity_description=complexity_descriptions[complexity],
-                schema=json.dumps(schema, indent=2),
-                sample_data=sample_data,
-                node_types=", ".join(node_types) if node_types else "No node types defined",
-                edge_types=", ".join(edge_types) if edge_types else "No edge types defined"
-            )
+        print(f"DEBUG: LLM prompt will use node_types: {node_types}")
+        print(f"DEBUG: LLM prompt will use edge_types: {edge_types}")
+        
+        formatted_messages = prompt.format_messages(
+            batch_size=batch_size,
+            complexity=complexity,
+            complexity_description=complexity_descriptions[complexity],
+            schema=json.dumps(schema, indent=2),
+            sample_data=sample_data,
+            node_types=", ".join(node_types) if node_types else "No node types defined",
+            edge_types=", ".join(edge_types) if edge_types else "No edge types defined"
         )
+        
+        print(f"DEBUG: LLM prompt (first 500 chars): {str(formatted_messages[1].content)[:500]}...")
+        
+        response = self.llm.invoke(formatted_messages)
         
         # Parse the response
         try:
@@ -317,11 +332,15 @@ Output as JSON array.""")
             results = self.kuzu_adapter.execute_cypher(cypher)
             
             # Query is valid if it executes without error
+            print(f"DEBUG: Valid query: {cypher[:100]}...")
             return True, results, None
             
         except Exception as e:
             # Query failed - return error details
-            return False, None, str(e)
+            error_msg = str(e)
+            print(f"DEBUG: Invalid query: {cypher[:100]}...")
+            print(f"DEBUG: Error: {error_msg}")
+            return False, None, error_msg
     
     def _extract_patterns(self, cypher: str) -> List[str]:
         """Extract query patterns from Cypher query.

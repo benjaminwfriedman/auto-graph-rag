@@ -9,19 +9,20 @@ from .networkx_loader import ProcessedGraph
 class KuzuAdapter:
     """Adapter for Kuzu embedded graph database."""
     
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, create_new: bool = True):
         """Initialize Kuzu database connection.
         
         Args:
             db_path: Path to database directory
+            create_new: If True, removes existing database. If False, connects to existing.
         """
         self.db_path = Path(db_path)
         
         # Create parent directory if needed, but not the database directory itself
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Remove existing database if it exists
-        if self.db_path.exists():
+        # Remove existing database only if create_new=True
+        if create_new and self.db_path.exists():
             import shutil
             if self.db_path.is_dir():
                 shutil.rmtree(self.db_path)
@@ -312,28 +313,104 @@ class KuzuAdapter:
         Returns:
             Schema information
         """
-        # Use the tracked tables from ingestion
+        # First try using tracked tables from ingestion
+        if self.created_node_tables or self.created_edge_tables:
+            schema = {
+                "node_tables": [],
+                "edge_tables": [],
+                "statistics": {}
+            }
+            
+            # Add node tables
+            for table_info in self.created_node_tables:
+                schema["node_tables"].append({
+                    "name": table_info["name"],
+                    "properties": table_info["properties"]
+                })
+            
+            # Add edge tables  
+            for table_info in self.created_edge_tables:
+                schema["edge_tables"].append({
+                    "name": table_info["name"],
+                    "from": table_info["source"],
+                    "to": table_info["target"],
+                    "properties": table_info["properties"]
+                })
+            
+            # Add basic statistics
+            schema["statistics"] = {
+                "num_node_tables": len(schema["node_tables"]),
+                "num_edge_tables": len(schema["edge_tables"])
+            }
+            
+            return schema
+        
+        # If no tracked tables, introspect the database
+        return self._introspect_schema()
+    
+    def _introspect_schema(self) -> Dict[str, Any]:
+        """Introspect schema from existing database."""
         schema = {
             "node_tables": [],
             "edge_tables": [],
             "statistics": {}
         }
         
-        # Add node tables
-        for table_info in self.created_node_tables:
-            schema["node_tables"].append({
-                "name": table_info["name"],
-                "properties": table_info["properties"]
-            })
-        
-        # Add edge tables  
-        for table_info in self.created_edge_tables:
-            schema["edge_tables"].append({
-                "name": table_info["name"],
-                "from": table_info["source"],
-                "to": table_info["target"],
-                "properties": table_info["properties"]
-            })
+        try:
+            # Get all node tables
+            result = self.conn.execute("CALL show_tables() RETURN name")
+            
+            tables = []
+            while result.has_next():
+                row = result.get_next()
+                tables.append(row[0])
+            
+            # Try to identify node vs edge tables by querying them
+            for table_name in tables:
+                try:
+                    # Check if it's a node table (has nodes)
+                    node_query = f"MATCH (n:{table_name}) RETURN n LIMIT 1"
+                    node_result = self.conn.execute(node_query)
+                    
+                    if node_result.has_next():
+                        # It's a node table - get properties
+                        sample_node = node_result.get_next()[0]
+                        properties = [key for key in sample_node.keys() 
+                                    if not key.startswith('_')]  # Skip Kuzu internal properties
+                        
+                        schema["node_tables"].append({
+                            "name": table_name,
+                            "properties": properties
+                        })
+                        continue
+                        
+                except:
+                    pass
+                
+                try:
+                    # Check if it's an edge table (has relationships)
+                    edge_query = f"MATCH ()-[r:{table_name}]->() RETURN r LIMIT 1"
+                    edge_result = self.conn.execute(edge_query)
+                    
+                    if edge_result.has_next():
+                        # It's an edge table - get properties
+                        sample_edge = edge_result.get_next()[0]
+                        properties = [key for key in sample_edge.keys() 
+                                    if not key.startswith('_')]  # Skip Kuzu internal properties
+                        
+                        # Try to determine source/target types (simplified)
+                        schema["edge_tables"].append({
+                            "name": table_name,
+                            "from": "unknown",  # Would need more complex logic
+                            "to": "unknown",    # Would need more complex logic
+                            "properties": properties
+                        })
+                        
+                except:
+                    pass
+                    
+        except Exception as e:
+            print(f"Schema introspection failed: {e}")
         
         # Add basic statistics
         schema["statistics"] = {

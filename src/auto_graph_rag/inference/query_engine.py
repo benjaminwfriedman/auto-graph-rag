@@ -50,16 +50,19 @@ class QueryEngine:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
-        # Load model
+        # Always use auto device mapping to handle LoRA adapters and offloaded models correctly
+        # This prevents issues with meta device parameters from training
+        logger.info("Loading model with automatic device mapping to handle LoRA adapters")
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_path,
-            device_map=self.device if self.device == "auto" else None,
+            device_map="auto",
             torch_dtype=torch.bfloat16,
-            trust_remote_code=True
+            trust_remote_code=True,
+            low_cpu_mem_usage=True  # Important for handling offloaded models
         )
         
-        if self.device != "auto":
-            self.model = self.model.to(self.device)
+        # Don't try to move the model after loading with device_map
+        # The device_map handles placement automatically
         
         self.model.eval()
     
@@ -282,7 +285,6 @@ class QueryEngine:
         # Fix table/label names
         if "table" in error_lower or "label" in error_lower:
             # Try to extract the problematic label and fix case
-            import re
             match = re.search(r"'(\w+)'", error)
             if match:
                 bad_label = match.group(1)
