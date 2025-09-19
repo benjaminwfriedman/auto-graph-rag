@@ -1,0 +1,80 @@
+{
+  "nodes": {
+    "company_Employee": {
+      "properties": [
+        "id",
+        "salary",
+        "name",
+        "department",
+        "level"
+      ],
+      "description": "This node represents an employee in a company. It contains information about the employee's ID, salary, name, department, and level.",
+      "example_values": {
+        "id": "emp1",
+        "salary": 120000.0,
+        "name": "Alice Johnson",
+        "department": "Engineering",
+        "level": "Senior"
+      }
+    },
+    "company_Department": {
+      "properties": [
+        "id",
+        "budget",
+        "head_count",
+        "name"
+      ],
+      "description": "This node represents a department in a company. It contains information about the department's ID, budget, head count, and name.",
+      "example_values": {
+        "id": "dept1",
+        "budget": 2000000.0,
+        "head_count": 25.0,
+        "name": "Engineering"
+      }
+    },
+    "company_Project": {
+      "properties": [
+        "id",
+        "budget",
+        "status",
+        "name"
+      ],
+      "description": "This node represents a project in a company. It contains information about the project's ID, budget, status, and name.",
+      "example_values": {
+        "id": "proj1",
+        "budget": 500000.0,
+        "status": "Active",
+        "name": "Alpha"
+      }
+    }
+  },
+  "edges": {
+    "company_WORKED_ON_Employee_to_Project": {
+      "source": "company_Employee",
+      "target": "company_Project",
+      "properties": [
+        "hours",
+        "role"
+      ],
+      "description": "This edge represents the relationship between an employee and a project, indicating that the employee has worked on the project. It contains information about the hours the employee has worked and their role in the project.",
+      "cardinality": "many-to-many"
+    },
+    "company_BELONGS_TO_Employee_to_Department": {
+      "source": "company_Employee",
+      "target": "company_Department",
+      "properties": [
+        "since"
+      ],
+      "description": "This edge represents the relationship between an employee and a department, indicating that the employee belongs to the department. It contains information about when the employee joined the department.",
+      "cardinality": "many-to-one"
+    },
+    "company_OWNED_BY_Project_to_Department": {
+      "source": "company_Project",
+      "target": "company_Department",
+      "properties": [],
+      "description": "This edge represents the relationship between a project and a department, indicating that the project is owned by the department.",
+      "cardinality": "many-to-one"
+    }
+  },
+  "summary": "This graph represents the structure of a company, including its employees, departments, and projects. It captures the relationships between these entities, such as which employees work on which projects, which employees belong to which departments, and which departments own which projects."
+}

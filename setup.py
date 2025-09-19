@@ -54,7 +54,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "auto-graph-rag=auto_graph_rag.cli:app",
+            "auto-graph-rag=auto_graph_rag.cli:main",
         ],
     },
 )

@@ -69,9 +69,21 @@ class GraphExplorer:
         """
         # Get basic schema info from database
         db_schema = kuzu_adapter.get_schema_info()
+        print(f"DEBUG: DB schema has {len(db_schema.get('node_tables', []))} node tables, {len(db_schema.get('edge_tables', []))} edge tables")
         
         # Sample data from each table
         samples = self._sample_data(kuzu_adapter, max_samples)
+        print(f"DEBUG: Sampled {len(samples)} table groups")
+        
+        # Check if we have any meaningful data
+        total_sample_items = sum(len(sample_list) for sample_list in samples.values())
+        print(f"DEBUG: Total sample items: {total_sample_items}")
+        
+        if total_sample_items == 0:
+            print("DEBUG: No sample data found - this may cause empty schema")
+        
+        if not db_schema.get('node_tables') and not db_schema.get('edge_tables'):
+            print("DEBUG: No schema info found - this may cause empty schema")
         
         # Use LLM to analyze and understand the graph
         prompt = ChatPromptTemplate.from_messages([
@@ -99,7 +111,7 @@ Please analyze this graph and provide a comprehensive schema understanding.""")
             "format_instructions": self.parser.get_format_instructions()
         })
         
-        # Convert to dictionary format
+        # Convert to dictionary format  
         schema_dict = {
             "nodes": {},
             "edges": {},
@@ -121,6 +133,10 @@ Please analyze this graph and provide a comprehensive schema understanding.""")
                 "description": edge.description,
                 "cardinality": edge.cardinality
             }
+        
+        # DEBUG: Print what we're returning
+        print(f"DEBUG: Schema conversion - nodes: {list(schema_dict['nodes'].keys())}")
+        print(f"DEBUG: Schema conversion - edges: {list(schema_dict['edges'].keys())}")
         
         return schema_dict
     
@@ -144,27 +160,27 @@ Please analyze this graph and provide a comprehensive schema understanding.""")
         # Sample node tables
         for table in schema["node_tables"]:
             table_name = table["name"]
+            # In Kuzu, the node label is the table name itself
             query = f"MATCH (n:{table_name}) RETURN n LIMIT {min(10, max_samples)}"
             
             try:
                 results = kuzu_adapter.execute_cypher(query)
-                samples[f"node_{table_name}"] = results
+                samples[f"node_{table_name}"] = results[:min(10, max_samples)]
             except Exception as e:
+                print(f"Failed to sample node table {table_name}: {e}")
                 samples[f"node_{table_name}"] = []
         
-        # Sample edge tables
+        # Sample edge tables  
         for table in schema["edge_tables"]:
             table_name = table["name"]
-            query = f"""
-            MATCH (s)-[r:{table_name}]->(t) 
-            RETURN s, r, t 
-            LIMIT {min(10, max_samples)}
-            """
+            # In Kuzu, the relationship type is the table name itself
+            query = f"MATCH ()-[r:{table_name}]->() RETURN r LIMIT {min(5, max_samples)}"
             
             try:
                 results = kuzu_adapter.execute_cypher(query)
-                samples[f"edge_{table_name}"] = results
+                samples[f"edge_{table_name}"] = results[:min(5, max_samples)]
             except Exception as e:
+                print(f"Failed to sample edge table {table_name}: {e}")
                 samples[f"edge_{table_name}"] = []
         
         return samples
