@@ -384,3 +384,125 @@ Output as JSON array.""")
             patterns.append("relationship")
             
         return patterns if patterns else ["simple"]
+    
+    def _group_edges_semantically(self, edge_names: List[str]) -> Dict[str, List[str]]:
+        """Group edges by semantic similarity to reduce context size."""
+        groups = {
+            "diplomatic": [],
+            "economic": [], 
+            "military": [],
+            "cultural": [],
+            "political": [],
+            "geographic": [],
+            "other": []
+        }
+        
+        # Simple keyword-based grouping
+        for edge_name in edge_names:
+            name_lower = edge_name.lower()
+            if any(word in name_lower for word in ["embassy", "diplomatic", "treaty", "accord"]):
+                groups["diplomatic"].append(edge_name)
+            elif any(word in name_lower for word in ["economic", "trade", "export", "aid", "embargo"]):
+                groups["economic"].append(edge_name)
+            elif any(word in name_lower for word in ["military", "alliance", "war", "conflict", "attack"]):
+                groups["military"].append(edge_name)
+            elif any(word in name_lower for word in ["cultural", "student", "book", "tourism", "emigrant"]):
+                groups["cultural"].append(edge_name)
+            elif any(word in name_lower for word in ["political", "bloc", "vote", "protest", "government"]):
+                groups["political"].append(edge_name)
+            elif any(word in name_lower for word in ["territory", "border", "geographic", "region"]):
+                groups["geographic"].append(edge_name)
+            else:
+                groups["other"].append(edge_name)
+        
+        # Remove empty groups and limit group size
+        filtered_groups = {}
+        for k, v in groups.items():
+            if v:
+                # Split large groups into smaller batches (max 10 per batch)
+                if len(v) > 10:
+                    for i in range(0, len(v), 10):
+                        batch_name = f"{k}_batch_{i//10 + 1}"
+                        filtered_groups[batch_name] = v[i:i+10]
+                else:
+                    filtered_groups[k] = v
+        
+        return filtered_groups
+    
+    def _create_batch_schema(self, schema: Dict[str, Any], edge_group: List[str]) -> Dict[str, Any]:
+        """Create a smaller schema focused on specific edge types."""
+        batch_schema = {
+            "summary": schema.get("summary", ""),
+            "nodes": schema.get("nodes", {}),
+            "edges": {}
+        }
+        
+        # Only include edges from this group
+        all_edges = schema.get("edges", {})
+        for edge_name in edge_group:
+            if edge_name in all_edges:
+                batch_schema["edges"][edge_name] = all_edges[edge_name]
+        
+        return batch_schema
+    
+    def generate_batched(
+        self,
+        schema: Dict[str, Any],
+        num_examples: int,
+        complexity_distribution: Dict[int, float],
+        kuzu_adapter=None,
+        validate_queries: bool = True,
+        include_results: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Generate questions using batched approach for large schemas."""
+        print("DEBUG: Using batched question generation approach")
+        
+        # Group edge types semantically
+        edge_names = list(schema.get("edges", {}).keys())
+        edge_groups = self._group_edges_semantically(edge_names)
+        
+        print(f"DEBUG: Grouped {len(edge_names)} edge types into {len(edge_groups)} semantic groups")
+        for group_name, edges in edge_groups.items():
+            print(f"  - {group_name}: {len(edges)} edge types")
+        
+        all_questions = []
+        
+        # Calculate examples per group (weighted by group size)
+        total_edges = len(edge_names)
+        
+        for group_name, group_edges in edge_groups.items():
+            # Calculate examples for this group based on its proportion
+            group_weight = len(group_edges) / total_edges if total_edges > 0 else 1.0 / len(edge_groups)
+            group_examples = max(5, int(num_examples * group_weight))  # At least 5 examples per group
+            
+            print(f"DEBUG: Generating {group_examples} examples for {group_name} group")
+            
+            # Create schema subset for this group
+            batch_schema = self._create_batch_schema(schema, group_edges)
+            
+            # Generate questions for this batch
+            try:
+                batch_questions = self.generate(
+                    schema=batch_schema,
+                    num_examples=group_examples,
+                    complexity_distribution=complexity_distribution,
+                    kuzu_adapter=kuzu_adapter,
+                    validate_queries=validate_queries,
+                    include_results=include_results
+                )
+                
+                all_questions.extend(batch_questions)
+                print(f"DEBUG: Successfully generated {len(batch_questions)} questions for {group_name}")
+                
+            except Exception as e:
+                print(f"WARNING: Failed to generate questions for {group_name}: {e}")
+                continue
+        
+        # Shuffle and limit to requested number
+        import random
+        random.shuffle(all_questions)
+        
+        final_questions = all_questions[:num_examples]
+        print(f"DEBUG: Batched generation complete: {len(final_questions)} total questions")
+        
+        return final_questions
