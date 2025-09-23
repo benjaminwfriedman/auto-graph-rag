@@ -9,3 +9,6 @@ Match(e:Employee)-[:WORKED_ON]-(p:Project) return DISTINCT e
 Then I want the SLM or small LLM to be fine tuned on this generated training data. 
 
 Then the SLM or Small LLM can be used for graph rag effectivly. 
+
+
+This system can scale to work with larger graphs housed in Neo4j or other graph databases and fits well into agentic systems that leverage knowlege graph for structured memory an have need for high frequency recurrent inferance which becomes quickly expensive when leveraging the most popular LLMs. It fits well because SLMs can be served at a fraction of the price. There are also add on benifets for carbon consious firms, and firms participating in ESG initiatives because SLMs require far less energy to run and can be served using less energy than runing a personal computer. 

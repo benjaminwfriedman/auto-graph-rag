@@ -20,14 +20,14 @@ class GraphExplorer(GraphExplorerInterface):
     
     def __init__(
         self,
-        llm_provider: str = "openai",
-        llm_model: str = "gpt-4"
+        llm_provider: str = "auto",
+        llm_model: str = None
     ):
         """Initialize graph explorer.
         
         Args:
-            llm_provider: LLM provider (e.g., 'openai')
-            llm_model: Model name (e.g., 'gpt-4')
+            llm_provider: LLM provider ('openai', 'local', or 'auto' for automatic selection)
+            llm_model: Model name (auto-selected if None)
         """
         self.llm_provider = llm_provider
         self.llm_model = llm_model
@@ -57,7 +57,9 @@ class GraphExplorer(GraphExplorerInterface):
         return {
             "name": "GraphExplorer",
             "version": "1.0.0",
-            "description": "Explore and understand graph schemas using LLM",
+            "description": "Explore and understand graph schemas using LLM (supports OpenAI API or local GPU inference)",
+            "llm_provider": self.llm_provider,
+            "llm_model": self.llm_model,
             "inputs": {
                 "from_db": ["db_path", "max_samples", "save_schema_to"],
                 "from_adapter": ["kuzu_adapter", "max_samples", "save_schema_to"]
