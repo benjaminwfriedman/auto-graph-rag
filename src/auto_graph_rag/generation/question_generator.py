@@ -61,7 +61,7 @@ class QuestionGenerator:
         """
         self.kuzu_adapter = kuzu_adapter
         all_pairs = []
-        batch_size = 20  # Generate in batches for efficiency
+        batch_size = 3  # Generate in batches for efficiency
         
         # Calculate examples per complexity
         complexity_counts = {
@@ -386,46 +386,29 @@ Output as JSON array.""")
         return patterns if patterns else ["simple"]
     
     def _group_edges_semantically(self, edge_names: List[str]) -> Dict[str, List[str]]:
-        """Group edges by semantic similarity to reduce context size."""
-        groups = {
-            "diplomatic": [],
-            "economic": [], 
-            "military": [],
-            "cultural": [],
-            "political": [],
-            "geographic": [],
-            "other": []
-        }
+        """Group edges into batches to reduce context size.
         
-        # Simple keyword-based grouping
-        for edge_name in edge_names:
-            name_lower = edge_name.lower()
-            if any(word in name_lower for word in ["embassy", "diplomatic", "treaty", "accord"]):
-                groups["diplomatic"].append(edge_name)
-            elif any(word in name_lower for word in ["economic", "trade", "export", "aid", "embargo"]):
-                groups["economic"].append(edge_name)
-            elif any(word in name_lower for word in ["military", "alliance", "war", "conflict", "attack"]):
-                groups["military"].append(edge_name)
-            elif any(word in name_lower for word in ["cultural", "student", "book", "tourism", "emigrant"]):
-                groups["cultural"].append(edge_name)
-            elif any(word in name_lower for word in ["political", "bloc", "vote", "protest", "government"]):
-                groups["political"].append(edge_name)
-            elif any(word in name_lower for word in ["territory", "border", "geographic", "region"]):
-                groups["geographic"].append(edge_name)
-            else:
-                groups["other"].append(edge_name)
-        
-        # Remove empty groups and limit group size
+        Uses simple batching strategy to work with any domain.
+        """
+        batch_size = 10  # Optimal batch size for question generation
         filtered_groups = {}
-        for k, v in groups.items():
-            if v:
-                # Split large groups into smaller batches (max 10 per batch)
-                if len(v) > 10:
-                    for i in range(0, len(v), 10):
-                        batch_name = f"{k}_batch_{i//10 + 1}"
-                        filtered_groups[batch_name] = v[i:i+10]
-                else:
-                    filtered_groups[k] = v
+        
+        # Sort edge names for consistent processing
+        sorted_edges = sorted(edge_names)
+        
+        # Create batches
+        for i in range(0, len(sorted_edges), batch_size):
+            batch = sorted_edges[i:i + batch_size]
+            batch_num = i // batch_size + 1
+            total_batches = (len(sorted_edges) + batch_size - 1) // batch_size
+            
+            # Use descriptive batch names
+            if total_batches == 1:
+                batch_name = "relationships"
+            else:
+                batch_name = f"relationships_batch_{batch_num}_of_{total_batches}"
+            
+            filtered_groups[batch_name] = batch
         
         return filtered_groups
     
@@ -456,6 +439,8 @@ Output as JSON array.""")
     ) -> List[Dict[str, Any]]:
         """Generate questions using batched approach for large schemas."""
         print("DEBUG: Using batched question generation approach")
+
+        ## TODO this is the crucial method to improve
         
         # Group edge types semantically
         edge_names = list(schema.get("edges", {}).keys())

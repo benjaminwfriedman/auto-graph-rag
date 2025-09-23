@@ -1,6 +1,6 @@
 """LLM-based graph exploration agent."""
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 import json
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
@@ -204,9 +204,9 @@ class GraphExplorer:
         """Analyze a batch of node tables."""
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are analyzing node types in a graph database. For each node type, determine:
-1. What it represents in the real world
+1. What it represents in the domain
 2. Key properties and their meanings
-3. Example values
+3. Example values from the data
 
 Return JSON format: {{"NodeType": {{"description": "...", "properties": [...], "example_values": {{...}}}}}}"""),
             ("human", """Node Tables: {tables}
@@ -233,19 +233,19 @@ Analyze these node types:""")
         raise RuntimeError("Could not parse LLM response for node analysis")
     
     def _analyze_edges_incrementally(self, kuzu_adapter, schema_overview, node_schemas, max_samples) -> Dict[str, Any]:
-        """Analyze edge types in batches, grouping by semantic similarity."""
+        """Analyze edge types in batches."""
         edge_schemas = {}
         edge_tables = schema_overview.get("edge_tables", [])
         
-        # Group edges by semantic categories for more efficient analysis
-        edge_groups = self._group_edges_semantically([t["name"] for t in edge_tables])
-        
-        for group_name, edge_names in edge_groups.items():
-            print(f"DEBUG: Analyzing {group_name} group with {len(edge_names)} edge types")
+        # Process edges in batches
+        batch_size = 8  # Optimal batch size for context management
+        for i in range(0, len(edge_tables), batch_size):
+            batch = edge_tables[i:i + batch_size]
             
-            # Sample data for this group
-            group_samples = {}
-            for edge_name in edge_names:
+            # Sample data for this batch
+            batch_samples = {}
+            for table in batch:
+                edge_name = table["name"]
                 # Get actual relationship instances with node names
                 query = f"MATCH (a)-[r:{edge_name}]->(b) RETURN a.name as source_name, '{edge_name}' as rel_type, b.name as target_name, r as rel_data LIMIT {min(3, max_samples)}"
                 try:
@@ -268,78 +268,34 @@ Analyze these node types:""")
                                     examples.append(f"{source} --[{edge_name}]--> {target}")
                             else:
                                 examples.append(f"{source} --[{edge_name}]--> {target}")
-                        group_samples[edge_name] = {
+                        batch_samples[edge_name] = {
                             "type": edge_name,
                             "count": len(results),
                             "examples": examples,
                             "sample_relationships": results[:3]  # Include raw data for LLM analysis
                         }
                     else:
-                        group_samples[edge_name] = {"type": edge_name, "count": 0, "examples": []}
+                        batch_samples[edge_name] = {"type": edge_name, "count": 0, "examples": []}
                 except Exception as e:
                     print(f"Failed to sample {edge_name}: {e}")
-                    group_samples[edge_name] = {"type": edge_name, "count": 0, "examples": [], "error": str(e)}
+                    batch_samples[edge_name] = {"type": edge_name, "count": 0, "examples": [], "error": str(e)}
             
-            # Analyze this group
-            if group_samples:
-                group_analysis = self._analyze_edge_group(group_name, edge_names, group_samples, node_schemas)
-                edge_schemas.update(group_analysis)
+            # Analyze this batch with LLM
+            if batch_samples:
+                batch_analysis = self._analyze_edge_batch(batch, batch_samples, node_schemas)
+                edge_schemas.update(batch_analysis)
         
         return edge_schemas
     
-    def _group_edges_semantically(self, edge_names) -> Dict[str, List[str]]:
-        """Group edges by semantic similarity to reduce context size."""
-        groups = {
-            "diplomatic": [],
-            "economic": [], 
-            "military": [],
-            "cultural": [],
-            "political": [],
-            "geographic": [],
-            "other": []
-        }
-        
-        # Simple keyword-based grouping
-        for edge_name in edge_names:
-            name_lower = edge_name.lower()
-            if any(word in name_lower for word in ["embassy", "diplomatic", "treaty", "accord"]):
-                groups["diplomatic"].append(edge_name)
-            elif any(word in name_lower for word in ["economic", "trade", "export", "aid", "embargo"]):
-                groups["economic"].append(edge_name)
-            elif any(word in name_lower for word in ["military", "alliance", "war", "conflict", "attack"]):
-                groups["military"].append(edge_name)
-            elif any(word in name_lower for word in ["cultural", "student", "book", "tourism", "emigrant"]):
-                groups["cultural"].append(edge_name)
-            elif any(word in name_lower for word in ["political", "bloc", "vote", "protest", "government"]):
-                groups["political"].append(edge_name)
-            elif any(word in name_lower for word in ["territory", "border", "geographic", "region"]):
-                groups["geographic"].append(edge_name)
-            else:
-                groups["other"].append(edge_name)
-        
-        # Remove empty groups and limit group size
-        filtered_groups = {}
-        for k, v in groups.items():
-            if v:
-                # Split large groups into smaller batches
-                if len(v) > 8:
-                    for i in range(0, len(v), 8):
-                        batch_name = f"{k}_batch_{i//8 + 1}"
-                        filtered_groups[batch_name] = v[i:i+8]
-                else:
-                    filtered_groups[k] = v
-        
-        return filtered_groups
-    
-    def _analyze_edge_group(self, group_name, edge_names, samples, node_schemas) -> Dict[str, Any]:
-        """Analyze a semantically grouped set of edges."""
+    def _analyze_edge_batch(self, tables, samples, node_schemas) -> Dict[str, Any]:
+        """Analyze a batch of edge types."""
         # Build the system prompt with known node types
         node_types_str = str(list(node_schemas.keys()))
-        system_prompt = f"""You are analyzing {group_name} relationships in an international relations graph. 
+        system_prompt = f"""You are analyzing relationship types in a graph database. 
 Known node types: {node_types_str}
 
 For each relationship, determine:
-1. What it represents in international relations
+1. What it represents in the domain - use context of the domain + examples to elaborate
 2. Source and target node types
 3. Cardinality (one-to-many, many-to-many, etc.)
 4. Properties (if any)
@@ -355,8 +311,7 @@ Return a JSON object where each key is a relationship name and the value contain
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
-            ("human", """Relationship Group: {group_name}
-Edge Types: {edge_names}
+            ("human", """Edge Types: {edge_names}
 Sample Data: {samples}
 
 Analyze these relationships:""")
@@ -364,16 +319,18 @@ Analyze these relationships:""")
         
         llm = ChatOpenAI(model=self.model, temperature=0)
         
+        # Extract edge names from the tables
+        edge_names = [t["name"] for t in tables]
+        
         result = llm.invoke(prompt.format_messages(
-            group_name=group_name,
-            edge_names=edge_names,
+            edge_names=json.dumps(edge_names),
             samples=json.dumps(samples, default=str)
         ))
         
         try:
             import re
             content = result.content.strip()
-            print(f"DEBUG: LLM response for {group_name}: {content[:500]}...")
+            print(f"DEBUG: LLM response for edge batch: {content[:500]}...")
             
             # Try to find the complete JSON object in the response (including nested objects)
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
@@ -387,14 +344,14 @@ Analyze these relationships:""")
                 print(f"DEBUG: No JSON object found, trying to parse entire content as JSON")
                 return json.loads(content)
         except Exception as e:
-            print(f"ERROR: Failed to parse JSON for {group_name}: {e}")
+            print(f"ERROR: Failed to parse JSON for edge batch: {e}")
             print(f"ERROR: Full LLM response: {content}")
-            raise RuntimeError(f"Failed to parse edge group analysis for {group_name}. LLM did not return valid JSON format. Error: {e}")
+            raise RuntimeError(f"Failed to parse edge batch analysis. LLM did not return valid JSON format. Error: {e}")
     
     def _synthesize_final_schema(self, schema_overview, node_schemas, edge_schemas) -> Dict[str, Any]:
         """Synthesize final comprehensive schema."""
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are creating a final comprehensive schema summary for an international relations knowledge graph.
+            ("system", """You are creating a final comprehensive schema summary for a knowledge graph.
 
 Based on the analyzed components, provide a clear 2-3 sentence summary of:
 1. The domain and purpose of this graph
@@ -409,7 +366,7 @@ Number of edge types: {num_edges}
 Key node types: {node_types}
 Key relationship categories: {edge_categories}
 
-Create a summary of this international relations knowledge graph:""")
+Create a summary of this knowledge graph:""")
         ])
         
         llm = ChatOpenAI(model=self.model, temperature=0)
