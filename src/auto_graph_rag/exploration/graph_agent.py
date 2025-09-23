@@ -1,6 +1,6 @@
 """LLM-based graph exploration agent."""
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 import json
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
@@ -58,7 +58,7 @@ class GraphExplorer:
         kuzu_adapter,
         max_samples: int = 100
     ) -> Dict[str, Any]:
-        """Explore graph structure and learn schema.
+        """Explore graph structure and learn schema using multi-step approach.
         
         Args:
             kuzu_adapter: KuzuAdapter instance
@@ -67,78 +67,31 @@ class GraphExplorer:
         Returns:
             Learned graph schema
         """
-        # Get basic schema info from database
-        db_schema = kuzu_adapter.get_schema_info()
-        print(f"DEBUG: DB schema has {len(db_schema.get('node_tables', []))} node tables, {len(db_schema.get('edge_tables', []))} edge tables")
+        print("DEBUG: Starting multi-step schema exploration...")
         
-        # Sample data from each table
-        samples = self._sample_data(kuzu_adapter, max_samples)
-        print(f"DEBUG: Sampled {len(samples)} table groups")
-        
-        # Check if we have any meaningful data
-        total_sample_items = sum(len(sample_list) for sample_list in samples.values())
-        print(f"DEBUG: Total sample items: {total_sample_items}")
-        
-        if total_sample_items == 0:
-            print("DEBUG: No sample data found - this may cause empty schema")
-        
-        if not db_schema.get('node_tables') and not db_schema.get('edge_tables'):
-            print("DEBUG: No schema info found - this may cause empty schema")
-        
-        # Use LLM to analyze and understand the graph
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a graph database expert. Analyze the provided graph schema and data samples to understand:
-1. What each node type represents
-2. What properties are important for each node type
-3. What each edge type represents and its cardinality
-4. The overall domain of the graph
-
-{format_instructions}"""),
-            ("human", """Database Schema:
-{db_schema}
-
-Sample Data:
-{samples}
-
-Please analyze this graph and provide a comprehensive schema understanding.""")
-        ])
-        
-        chain = prompt | self.llm | self.parser
-        
-        result = chain.invoke({
-            "db_schema": json.dumps(db_schema, indent=2),
-            "samples": json.dumps(samples, indent=2),
-            "format_instructions": self.parser.get_format_instructions()
-        })
-        
-        # Convert to dictionary format  
-        schema_dict = {
-            "nodes": {},
-            "edges": {},
-            "summary": result.summary
-        }
-        
-        for node in result.nodes:
-            schema_dict["nodes"][node.name] = {
-                "properties": node.properties,
-                "description": node.description,
-                "examples": node.example_values
-            }
-        
-        for edge in result.edges:
-            schema_dict["edges"][edge.name] = {
-                "source": edge.source,
-                "target": edge.target,
-                "properties": edge.properties,
-                "description": edge.description,
-                "cardinality": edge.cardinality
-            }
-        
-        # DEBUG: Print what we're returning
-        print(f"DEBUG: Schema conversion - nodes: {list(schema_dict['nodes'].keys())}")
-        print(f"DEBUG: Schema conversion - edges: {list(schema_dict['edges'].keys())}")
-        
-        return schema_dict
+        try:
+            # Step 1: Get overview
+            schema_overview = self._get_schema_overview(kuzu_adapter)
+            print(f"DEBUG: Got schema overview with {len(schema_overview.get('node_tables', []))} node tables, {len(schema_overview.get('edge_tables', []))} edge tables")
+            
+            # Step 2: Analyze nodes incrementally
+            node_schemas = self._analyze_nodes_incrementally(kuzu_adapter, schema_overview, max_samples)
+            print(f"DEBUG: Analyzed {len(node_schemas)} node types")
+            
+            # Step 3: Analyze edges in batches
+            edge_schemas = self._analyze_edges_incrementally(kuzu_adapter, schema_overview, node_schemas, max_samples)
+            print(f"DEBUG: Analyzed {len(edge_schemas)} edge types")
+            
+            # Step 4: Generate final schema
+            final_schema = self._synthesize_final_schema(schema_overview, node_schemas, edge_schemas)
+            print(f"DEBUG: Final schema - nodes: {list(final_schema['nodes'].keys())}")
+            print(f"DEBUG: Final schema - edges: {list(final_schema['edges'].keys())}")
+            
+            return final_schema
+            
+        except Exception as e:
+            print(f"ERROR: Multi-step schema exploration failed: {e}")
+            raise RuntimeError(f"Schema exploration failed: {e}") from e
     
     def _sample_data(
         self,
@@ -184,3 +137,253 @@ Please analyze this graph and provide a comprehensive schema understanding.""")
                 samples[f"edge_{table_name}"] = []
         
         return samples
+    
+    def _get_schema_overview(self, kuzu_adapter) -> Dict[str, Any]:
+        """Get basic schema overview without detailed sampling."""
+        schema = kuzu_adapter.get_schema_info()
+        
+        # Count total records for context
+        total_nodes = 0
+        total_edges = 0
+        
+        for table in schema.get("node_tables", []):
+            try:
+                count_query = f"MATCH (n:{table['name']}) RETURN count(n) as count"
+                result = kuzu_adapter.execute_cypher(count_query)
+                if result:
+                    total_nodes += result[0].get('count', 0)
+            except:
+                pass
+        
+        for table in schema.get("edge_tables", []):
+            try:
+                count_query = f"MATCH ()-[r:{table['name']}]->() RETURN count(r) as count"
+                result = kuzu_adapter.execute_cypher(count_query)
+                if result:
+                    total_edges += result[0].get('count', 0)
+            except:
+                pass
+        
+        return {
+            "node_tables": schema.get("node_tables", []),
+            "edge_tables": schema.get("edge_tables", []),
+            "total_nodes": total_nodes,
+            "total_edges": total_edges
+        }
+    
+    def _analyze_nodes_incrementally(self, kuzu_adapter, schema_overview, max_samples) -> Dict[str, Any]:
+        """Analyze node types in small batches."""
+        node_schemas = {}
+        node_tables = schema_overview.get("node_tables", [])
+        
+        # Process nodes in batches of 2-3
+        batch_size = 2
+        for i in range(0, len(node_tables), batch_size):
+            batch = node_tables[i:i + batch_size]
+            
+            # Sample data for this batch
+            batch_samples = {}
+            for table in batch:
+                table_name = table["name"]
+                query = f"MATCH (n:{table_name}) RETURN n LIMIT {min(3, max_samples)}"
+                try:
+                    results = kuzu_adapter.execute_cypher(query)
+                    batch_samples[table_name] = results[:3]
+                except Exception as e:
+                    print(f"Failed to sample {table_name}: {e}")
+                    batch_samples[table_name] = []
+            
+            # Analyze this batch with LLM
+            if batch_samples:
+                batch_analysis = self._analyze_node_batch(batch, batch_samples)
+                node_schemas.update(batch_analysis)
+        
+        return node_schemas
+    
+    def _analyze_node_batch(self, tables, samples) -> Dict[str, Any]:
+        """Analyze a batch of node tables."""
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are analyzing node types in a graph database. For each node type, determine:
+1. What it represents in the domain
+2. Key properties and their meanings
+3. Example values from the data
+
+Return JSON format: {{"NodeType": {{"description": "...", "properties": [...], "example_values": {{...}}}}}}"""),
+            ("human", """Node Tables: {tables}
+Sample Data: {samples}
+
+Analyze these node types:""")
+        ])
+        
+        llm = ChatOpenAI(model=self.model, temperature=0)
+        
+        result = llm.invoke(prompt.format_messages(
+            tables=json.dumps([t["name"] for t in tables]),
+            samples=json.dumps(samples, default=str)
+        ))
+        
+        try:
+            import re
+            json_match = re.search(r'\{.*\}', result.content, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse node batch analysis: {e}")
+        
+        raise RuntimeError("Could not parse LLM response for node analysis")
+    
+    def _analyze_edges_incrementally(self, kuzu_adapter, schema_overview, node_schemas, max_samples) -> Dict[str, Any]:
+        """Analyze edge types in batches."""
+        edge_schemas = {}
+        edge_tables = schema_overview.get("edge_tables", [])
+        
+        # Process edges in batches
+        batch_size = 8  # Optimal batch size for context management
+        for i in range(0, len(edge_tables), batch_size):
+            batch = edge_tables[i:i + batch_size]
+            
+            # Sample data for this batch
+            batch_samples = {}
+            for table in batch:
+                edge_name = table["name"]
+                # Get actual relationship instances with node names
+                query = f"MATCH (a)-[r:{edge_name}]->(b) RETURN a.name as source_name, '{edge_name}' as rel_type, b.name as target_name, r as rel_data LIMIT {min(3, max_samples)}"
+                try:
+                    results = kuzu_adapter.execute_cypher(query)
+                    if results:
+                        # Format examples for readability
+                        examples = []
+                        for result in results:
+                            source = result.get('source_name', 'Unknown')
+                            target = result.get('target_name', 'Unknown')
+                            rel_data = result.get('rel_data', {})
+                            # Extract any properties from the relationship data
+                            if rel_data and isinstance(rel_data, dict) and len(rel_data) > 0:
+                                # Filter out internal fields if any
+                                prop_items = {k: v for k, v in rel_data.items() if not k.startswith('_')}
+                                if prop_items:
+                                    prop_str = f" {prop_items}"
+                                    examples.append(f"{source} --[{edge_name}{prop_str}]--> {target}")
+                                else:
+                                    examples.append(f"{source} --[{edge_name}]--> {target}")
+                            else:
+                                examples.append(f"{source} --[{edge_name}]--> {target}")
+                        batch_samples[edge_name] = {
+                            "type": edge_name,
+                            "count": len(results),
+                            "examples": examples,
+                            "sample_relationships": results[:3]  # Include raw data for LLM analysis
+                        }
+                    else:
+                        batch_samples[edge_name] = {"type": edge_name, "count": 0, "examples": []}
+                except Exception as e:
+                    print(f"Failed to sample {edge_name}: {e}")
+                    batch_samples[edge_name] = {"type": edge_name, "count": 0, "examples": [], "error": str(e)}
+            
+            # Analyze this batch with LLM
+            if batch_samples:
+                batch_analysis = self._analyze_edge_batch(batch, batch_samples, node_schemas)
+                edge_schemas.update(batch_analysis)
+        
+        return edge_schemas
+    
+    def _analyze_edge_batch(self, tables, samples, node_schemas) -> Dict[str, Any]:
+        """Analyze a batch of edge types."""
+        # Build the system prompt with known node types
+        node_types_str = str(list(node_schemas.keys()))
+        system_prompt = f"""You are analyzing relationship types in a graph database. 
+Known node types: {node_types_str}
+
+For each relationship, determine:
+1. What it represents in the domain - use context of the domain + examples to elaborate
+2. Source and target node types
+3. Cardinality (one-to-many, many-to-many, etc.)
+4. Properties (if any)
+5. Concrete examples from the sample data provided
+
+IMPORTANT: 
+- Always include the "examples" field with actual relationship instances from the sample data
+- Return ONLY valid JSON format - no text before or after
+- Use double quotes for all strings
+- Include all required fields for each relationship
+
+Return a JSON object where each key is a relationship name and the value contains: description, source, target, cardinality, properties (array), examples (array of strings)."""
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", """Edge Types: {edge_names}
+Sample Data: {samples}
+
+Analyze these relationships:""")
+        ])
+        
+        llm = ChatOpenAI(model=self.model, temperature=0)
+        
+        # Extract edge names from the tables
+        edge_names = [t["name"] for t in tables]
+        
+        result = llm.invoke(prompt.format_messages(
+            edge_names=json.dumps(edge_names),
+            samples=json.dumps(samples, default=str)
+        ))
+        
+        try:
+            import re
+            content = result.content.strip()
+            print(f"DEBUG: LLM response for edge batch: {content[:500]}...")
+            
+            # Try to find the complete JSON object in the response (including nested objects)
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group()
+                print(f"DEBUG: Extracted JSON length: {len(json_str)} chars")
+                print(f"DEBUG: Extracted JSON start: {json_str[:200]}...")
+                return json.loads(json_str)
+            else:
+                # If no JSON found, try parsing the entire content as JSON
+                print(f"DEBUG: No JSON object found, trying to parse entire content as JSON")
+                return json.loads(content)
+        except Exception as e:
+            print(f"ERROR: Failed to parse JSON for edge batch: {e}")
+            print(f"ERROR: Full LLM response: {content}")
+            raise RuntimeError(f"Failed to parse edge batch analysis. LLM did not return valid JSON format. Error: {e}")
+    
+    def _synthesize_final_schema(self, schema_overview, node_schemas, edge_schemas) -> Dict[str, Any]:
+        """Synthesize final comprehensive schema."""
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are creating a final comprehensive schema summary for a knowledge graph.
+
+Based on the analyzed components, provide a clear 2-3 sentence summary of:
+1. The domain and purpose of this graph
+2. What types of entities and relationships it contains
+3. What kinds of questions it can answer
+
+Be concise and focus on the key insights."""),
+            ("human", """Schema Overview: {overview}
+Number of node types: {num_nodes}
+Number of edge types: {num_edges}
+
+Key node types: {node_types}
+Key relationship categories: {edge_categories}
+
+Create a summary of this knowledge graph:""")
+        ])
+        
+        llm = ChatOpenAI(model=self.model, temperature=0)
+        
+        result = llm.invoke(prompt.format_messages(
+            overview=f"Total nodes: {schema_overview.get('total_nodes', 0)}, Total edges: {schema_overview.get('total_edges', 0)}",
+            num_nodes=len(node_schemas),
+            num_edges=len(edge_schemas),
+            node_types=list(node_schemas.keys()),
+            edge_categories=list(set(edge_name.split('_')[0] for edge_name in edge_schemas.keys()))
+        ))
+        
+        # Extract summary from result
+        summary = result.content if hasattr(result, 'content') else str(result)
+        
+        return {
+            "summary": summary.strip(),
+            "nodes": node_schemas,
+            "edges": edge_schemas
+        }

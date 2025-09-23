@@ -186,15 +186,32 @@ class DataGenerator(DataGeneratorInterface):
             except Exception as e:
                 logger.error(f"Failed to check actual tables: {e}")
         
-        # Generate dataset
-        dataset = self.question_gen.generate(
-            schema=schema,
-            num_examples=num_examples,
-            complexity_distribution=complexity_distribution,
-            kuzu_adapter=kuzu_adapter,
-            validate_queries=kuzu_adapter is not None,
-            include_results=True
-        )
+        # Check if schema is large and needs batched approach
+        edge_count = len(schema.get("edges", {}))
+        use_batched = edge_count > 15  # Use batched approach for large schemas
+        
+        if use_batched:
+            logger.info(f"Large schema detected ({edge_count} edge types). Using batched generation approach.")
+            # Generate dataset using batched approach
+            dataset = self.question_gen.generate_batched(
+                schema=schema,
+                num_examples=num_examples,
+                complexity_distribution=complexity_distribution,
+                kuzu_adapter=kuzu_adapter,
+                validate_queries=kuzu_adapter is not None,
+                include_results=True
+            )
+        else:
+            logger.info(f"Using standard generation approach for {edge_count} edge types.")
+            # Generate dataset using standard approach
+            dataset = self.question_gen.generate(
+                schema=schema,
+                num_examples=num_examples,
+                complexity_distribution=complexity_distribution,
+                kuzu_adapter=kuzu_adapter,
+                validate_queries=kuzu_adapter is not None,
+                include_results=True
+            )
         
         logger.info(f"Generated {len(dataset)} valid examples")
         
