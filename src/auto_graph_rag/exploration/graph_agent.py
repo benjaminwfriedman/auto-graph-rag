@@ -52,7 +52,7 @@ class GraphExplorer:
             model: Model name (auto-selected if None)
         """
         self.provider = provider
-        self.model = model
+        self.model = model or None
         
         # Auto-select provider and model based on availability
         if provider == "auto":

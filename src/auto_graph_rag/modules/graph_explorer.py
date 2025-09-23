@@ -31,7 +31,7 @@ class GraphExplorer(GraphExplorerInterface):
         """
         self.llm_provider = llm_provider
         self.llm_model = llm_model
-        self.explorer = LLMExplorer(llm_provider, llm_model)
+        self.explorer = LLMExplorer(provider=llm_provider, model=llm_model)
     
     def validate_inputs(self, **kwargs) -> bool:
         """Validate input parameters."""
