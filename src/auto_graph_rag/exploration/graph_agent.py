@@ -285,7 +285,13 @@ Analyze these node types:""")
         
         try:
             import re
-            json_match = re.search(r'\{.*\}', result.content, re.DOTALL)
+            # Handle different response types (ChatOpenAI returns object, HuggingFacePipeline returns string)
+            if hasattr(result, 'content'):
+                content = result.content
+            else:
+                content = str(result)
+            
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group())
         except Exception as e:
@@ -390,7 +396,11 @@ Analyze these relationships:""")
         
         try:
             import re
-            content = result.content.strip()
+            # Handle different response types
+            if hasattr(result, 'content'):
+                content = result.content.strip()
+            else:
+                content = str(result).strip()
             print(f"DEBUG: LLM response for edge batch: {content[:500]}...")
             
             # Try to find the complete JSON object in the response (including nested objects)
@@ -440,8 +450,11 @@ Create a summary of this knowledge graph:""")
             edge_categories=list(set(edge_name.split('_')[0] for edge_name in edge_schemas.keys()))
         ))
         
-        # Extract summary from result
-        summary = result.content if hasattr(result, 'content') else str(result)
+        # Extract summary from result (handle different response types)
+        if hasattr(result, 'content'):
+            summary = result.content
+        else:
+            summary = str(result)
         
         return {
             "summary": summary.strip(),
