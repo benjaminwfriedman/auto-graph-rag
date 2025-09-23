@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 try:
     from langchain_community.llms import HuggingFacePipeline
     from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+    print("HUGGINGFACE AVAILABLE")
     HF_AVAILABLE = True
 except ImportError:
     HF_AVAILABLE = False
