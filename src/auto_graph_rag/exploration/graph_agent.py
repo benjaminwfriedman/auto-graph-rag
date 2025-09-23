@@ -52,18 +52,24 @@ class GraphExplorer:
             model: Model name (auto-selected if None)
         """
         self.provider = provider
-        self.model = model or None
+        self.model = model
         
         # Auto-select provider and model based on availability
         if provider == "auto":
             if torch.cuda.is_available() and HF_AVAILABLE:
                 self.provider = "local"
-                self.model = model or "meta-llama/Llama-3.1-8B-Instruct"
+                self.model = self.model or "meta-llama/Llama-3.1-8B-Instruct"
                 print(f"🚀 Using local GPU inference with {self.model}")
             else:
                 self.provider = "openai"
-                self.model = model or "gpt-4"
+                self.model = self.model or "gpt-4"
                 print(f"☁️ Using OpenAI API with {self.model}")
+        elif provider == "local":
+            self.model = self.model or "meta-llama/Llama-3.1-8B-Instruct"
+            print(f"🚀 Using local GPU inference with {self.model}")
+        elif provider == "openai":
+            self.model = self.model or "gpt-4"
+            print(f"☁️ Using OpenAI API with {self.model}")
         
         if self.provider == "openai":
             self.llm = ChatOpenAI(model=self.model, temperature=0)
