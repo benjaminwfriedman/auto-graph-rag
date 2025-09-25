@@ -44,7 +44,8 @@ class QuestionGenerator:
         complexity_distribution: Dict[int, float],
         kuzu_adapter=None,
         validate_queries: bool = True,
-        include_results: bool = True
+        include_results: bool = True,
+        batch_size: int = 20
     ) -> List[Dict[str, Any]]:
         """Generate diverse questions based on schema.
         
@@ -55,13 +56,13 @@ class QuestionGenerator:
             kuzu_adapter: KuzuAdapter instance for query validation
             validate_queries: Whether to validate queries work
             include_results: Whether to include query results in training data
+            batch_size: Number of examples to generate per LLM call (default: 20)
             
         Returns:
             List of generated question-cypher pairs with results
         """
         self.kuzu_adapter = kuzu_adapter
         all_pairs = []
-        batch_size = 3  # Generate in batches for efficiency
         
         # Calculate examples per complexity
         complexity_counts = {
@@ -435,7 +436,8 @@ Output as JSON array.""")
         complexity_distribution: Dict[int, float],
         kuzu_adapter=None,
         validate_queries: bool = True,
-        include_results: bool = True
+        include_results: bool = True,
+        batch_size: int = 20
     ) -> List[Dict[str, Any]]:
         """Generate questions using batched approach for large schemas."""
         print("DEBUG: Using batched question generation approach")
@@ -473,7 +475,8 @@ Output as JSON array.""")
                     complexity_distribution=complexity_distribution,
                     kuzu_adapter=kuzu_adapter,
                     validate_queries=validate_queries,
-                    include_results=include_results
+                    include_results=include_results,
+                    batch_size=batch_size
                 )
                 
                 all_questions.extend(batch_questions)

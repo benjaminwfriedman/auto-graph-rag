@@ -76,7 +76,8 @@ class DataGenerator(DataGeneratorInterface):
         num_examples: int,
         output_path: Path,
         complexity_distribution: Optional[Dict[int, float]] = None,
-        db_path: Optional[Path] = None
+        db_path: Optional[Path] = None,
+        batch_size: int = 20
     ) -> List[Dict[str, Any]]:
         """Generate training data from schema file.
         
@@ -86,6 +87,7 @@ class DataGenerator(DataGeneratorInterface):
             output_path: Path to save dataset
             complexity_distribution: Distribution of query complexities
             db_path: Optional database path for validation
+            batch_size: Number of examples to generate per LLM call (default: 20)
             
         Returns:
             Generated dataset
@@ -109,7 +111,8 @@ class DataGenerator(DataGeneratorInterface):
             num_examples=num_examples,
             output_path=output_path,
             complexity_distribution=complexity_distribution,
-            kuzu_adapter=kuzu_adapter
+            kuzu_adapter=kuzu_adapter,
+            batch_size=batch_size
         )
     
     def generate_from_dict(
@@ -118,7 +121,8 @@ class DataGenerator(DataGeneratorInterface):
         num_examples: int,
         output_path: Optional[Path] = None,
         complexity_distribution: Optional[Dict[int, float]] = None,
-        kuzu_adapter: Optional[Any] = None
+        kuzu_adapter: Optional[Any] = None,
+        batch_size: int = 20
     ) -> List[Dict[str, Any]]:
         """Generate training data from schema dictionary.
         
@@ -128,6 +132,7 @@ class DataGenerator(DataGeneratorInterface):
             output_path: Optional path to save dataset
             complexity_distribution: Distribution of query complexities
             kuzu_adapter: Optional adapter for validation
+            batch_size: Number of examples to generate per LLM call (default: 20)
             
         Returns:
             Generated dataset
@@ -199,7 +204,8 @@ class DataGenerator(DataGeneratorInterface):
                 complexity_distribution=complexity_distribution,
                 kuzu_adapter=kuzu_adapter,
                 validate_queries=kuzu_adapter is not None,
-                include_results=True
+                include_results=True,
+                batch_size=batch_size
             )
         else:
             logger.info(f"Using standard generation approach for {edge_count} edge types.")
@@ -210,7 +216,8 @@ class DataGenerator(DataGeneratorInterface):
                 complexity_distribution=complexity_distribution,
                 kuzu_adapter=kuzu_adapter,
                 validate_queries=kuzu_adapter is not None,
-                include_results=True
+                include_results=True,
+                batch_size=batch_size
             )
         
         logger.info(f"Generated {len(dataset)} valid examples")

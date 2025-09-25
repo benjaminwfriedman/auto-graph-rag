@@ -2,10 +2,19 @@
 
 from typing import Dict, Any, List
 import json
+import torch
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
+
+try:
+    from langchain_community.llms import HuggingFacePipeline
+    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+    print("HUGGINGFACE AVAILABLE")
+    HF_AVAILABLE = True
+except ImportError:
+    HF_AVAILABLE = False
 
 
 class NodeTypeSchema(BaseModel):
@@ -36,22 +45,74 @@ class GraphSchema(BaseModel):
 class GraphExplorer:
     """Explore graph structure using LLM."""
     
-    def __init__(self, provider: str = "openai", model: str = "gpt-4"):
+    def __init__(self, provider: str = "auto", model: str = None):
         """Initialize graph explorer.
         
         Args:
-            provider: LLM provider
-            model: Model name
+            provider: LLM provider ("openai", "local", or "auto" for automatic selection)
+            model: Model name (auto-selected if None)
         """
         self.provider = provider
         self.model = model
         
-        if provider == "openai":
-            self.llm = ChatOpenAI(model=model, temperature=0)
+        # Auto-select provider and model based on availability
+        if provider == "auto":
+            if torch.cuda.is_available() and HF_AVAILABLE:
+                self.provider = "local"
+                self.model = self.model or "meta-llama/Llama-3.1-8B-Instruct"
+                print(f"🚀 Using local GPU inference with {self.model}")
+            else:
+                self.provider = "openai"
+                self.model = self.model or "gpt-4"
+                print(f"☁️ Using OpenAI API with {self.model}")
+        elif provider == "local":
+            self.model = self.model or "meta-llama/Llama-3.1-8B-Instruct"
+            print(f"🚀 Using local GPU inference with {self.model}")
+        elif provider == "openai":
+            self.model = self.model or "gpt-4"
+            print(f"☁️ Using OpenAI API with {self.model}")
+        
+        if self.provider == "openai":
+            self.llm = ChatOpenAI(model=self.model, temperature=0)
+        elif self.provider == "local":
+            if not HF_AVAILABLE:
+                raise ValueError("HuggingFace transformers not available. Install with: pip install transformers torch")
+            if not torch.cuda.is_available():
+                raise ValueError("CUDA not available. Local inference requires GPU.")
+            self.llm = self._setup_local_llm()
         else:
-            raise ValueError(f"Unsupported provider: {provider}")
+            raise ValueError(f"Unsupported provider: {self.provider}")
         
         self.parser = PydanticOutputParser(pydantic_object=GraphSchema)
+    
+    def _setup_local_llm(self):
+        """Setup local HuggingFace LLM pipeline."""
+        print(f"🔄 Loading {self.model} for local inference...")
+        
+        # Load tokenizer and model
+        tokenizer = AutoTokenizer.from_pretrained(self.model)
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model,
+            torch_dtype=torch.float16,
+            device_map="auto",
+            trust_remote_code=True
+        )
+        
+        # Create pipeline
+        pipe = pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            max_new_tokens=1024,
+            temperature=0.1,
+            do_sample=True,
+            return_full_text=False
+        )
+        
+        # Wrap in LangChain
+        llm = HuggingFacePipeline(pipeline=pipe)
+        print(f"✅ Local model loaded successfully")
+        return llm
     
     def explore(
         self,
@@ -215,7 +276,7 @@ Sample Data: {samples}
 Analyze these node types:""")
         ])
         
-        llm = ChatOpenAI(model=self.model, temperature=0)
+        llm = self.llm
         
         result = llm.invoke(prompt.format_messages(
             tables=json.dumps([t["name"] for t in tables]),
@@ -224,7 +285,13 @@ Analyze these node types:""")
         
         try:
             import re
-            json_match = re.search(r'\{.*\}', result.content, re.DOTALL)
+            # Handle different response types (ChatOpenAI returns object, HuggingFacePipeline returns string)
+            if hasattr(result, 'content'):
+                content = result.content
+            else:
+                content = str(result)
+            
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group())
         except Exception as e:
@@ -317,7 +384,7 @@ Sample Data: {samples}
 Analyze these relationships:""")
         ])
         
-        llm = ChatOpenAI(model=self.model, temperature=0)
+        llm = self.llm
         
         # Extract edge names from the tables
         edge_names = [t["name"] for t in tables]
@@ -329,7 +396,11 @@ Analyze these relationships:""")
         
         try:
             import re
-            content = result.content.strip()
+            # Handle different response types
+            if hasattr(result, 'content'):
+                content = result.content.strip()
+            else:
+                content = str(result).strip()
             print(f"DEBUG: LLM response for edge batch: {content[:500]}...")
             
             # Try to find the complete JSON object in the response (including nested objects)
@@ -369,7 +440,7 @@ Key relationship categories: {edge_categories}
 Create a summary of this knowledge graph:""")
         ])
         
-        llm = ChatOpenAI(model=self.model, temperature=0)
+        llm = self.llm
         
         result = llm.invoke(prompt.format_messages(
             overview=f"Total nodes: {schema_overview.get('total_nodes', 0)}, Total edges: {schema_overview.get('total_edges', 0)}",
@@ -379,8 +450,11 @@ Create a summary of this knowledge graph:""")
             edge_categories=list(set(edge_name.split('_')[0] for edge_name in edge_schemas.keys()))
         ))
         
-        # Extract summary from result
-        summary = result.content if hasattr(result, 'content') else str(result)
+        # Extract summary from result (handle different response types)
+        if hasattr(result, 'content'):
+            summary = result.content
+        else:
+            summary = str(result)
         
         return {
             "summary": summary.strip(),
