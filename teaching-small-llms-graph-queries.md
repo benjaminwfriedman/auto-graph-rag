@@ -16,6 +16,8 @@ This led to a simple insight: what if I could teach a small model about my speci
 
 Our core insight is simple but valuable: we decompose Graph RAG into two distinct phases—contextual learning and inference—and optimize each with purpose-built models. Crucially, we've designed this to be easily applicable to any knowledge graph with minimal manual intervention.
 
+![auto graph rag diagram](content/SLMDiagram.png)
+
 **Contextual learning** focuses on understanding the graph's syntax, topology, and attributes. Traditional Graph RAG relies on human engineers to manually explore graph structures and craft rich contextual prompts—a time-intensive process. We automate this through an agentic exploration system that strategically samples the knowledge graph to discover its schema, relationships, and query patterns. The system automatically adapts to different graph types and structures without requiring domain-specific configuration.
 
 **Inference** focuses on translating natural language inputs into valid graph queries. Rather than burning tokens on schema descriptions for every query, we distill the learned graph knowledge into a fine-tuned small language model (Llama-3.2-1B) using automatically generated question-Cypher pairs from the exploration phase.
