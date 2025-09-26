@@ -2,9 +2,12 @@
 
 from typing import Dict, Any, List, Optional, Tuple
 import json
-from langchain_openai import ChatOpenAI
+import logging
 from langchain.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
+from ..llm.providers import LLMProviderFactory
+
+logger = logging.getLogger(__name__)
 
 
 class QuestionCypherPair(BaseModel):
@@ -23,19 +26,24 @@ class QuestionBatch(BaseModel):
 class QuestionGenerator:
     """Generate diverse questions using LLM based on graph schema."""
     
-    def __init__(self, llm_provider: str = "openai", llm_model: str = "gpt-4"):
+    def __init__(self, llm_provider: str = "auto", llm_model: Optional[str] = None, kuzu_adapter=None):
         """Initialize question generator.
         
         Args:
-            llm_provider: LLM provider for generation
-            llm_model: Model to use for generation
+            llm_provider: LLM provider ("openai", "local", or "auto")
+            llm_model: Model to use (optional, auto-selected if None)
+            kuzu_adapter: Optional Kuzu adapter for validation
         """
-        if llm_provider == "openai":
-            self.llm = ChatOpenAI(model=llm_model, temperature=0.8)
-        else:
-            raise ValueError(f"Unsupported provider: {llm_provider}")
+        # Use the unified provider system
+        self.provider = LLMProviderFactory.create(
+            provider=llm_provider,
+            model=llm_model,
+            temperature=0.8  # Higher temperature for diversity
+        )
         
-        self.kuzu_adapter = None  # Will be set during generation
+        self.kuzu_adapter = kuzu_adapter
+        
+        logger.info(f"Initialized QuestionGenerator with {self.provider.get_model_name()}")
     
     def generate(
         self,
@@ -228,12 +236,26 @@ Output as JSON array.""")
         )
         
         
-        response = self.llm.invoke(formatted_messages)
+        # Convert messages to dict format for provider
+        messages = []
+        for msg in formatted_messages:
+            if hasattr(msg, 'type') and hasattr(msg, 'content'):
+                # LangChain message format
+                role = "system" if msg.type == "system" else "user"
+                messages.append({"role": role, "content": msg.content})
+            else:
+                # Already in dict format
+                messages.append(msg)
         
-        # Parse the response
+        # Use the provider's structured chat for JSON output
         try:
-            # Extract JSON from the response
-            content = response.content
+            pairs_data = self.provider.chat_structured(messages)
+            
+            # Ensure we have a list
+            if isinstance(pairs_data, dict):
+                pairs_data = pairs_data.get("pairs", [pairs_data])
+            
+            content = json.dumps(pairs_data)  # For fallback parsing
             
             # Try to find JSON array in the response
             import re

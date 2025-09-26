@@ -2,19 +2,13 @@
 
 from typing import Dict, Any, List
 import json
-import torch
-from langchain_openai import ChatOpenAI
+import logging
 from langchain.prompts import ChatPromptTemplate
 from langchain.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
+from ..llm.providers import LLMProviderFactory
 
-try:
-    from langchain_community.llms import HuggingFacePipeline
-    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-    print("HUGGINGFACE AVAILABLE")
-    HF_AVAILABLE = True
-except ImportError:
-    HF_AVAILABLE = False
+logger = logging.getLogger(__name__)
 
 
 class NodeTypeSchema(BaseModel):
@@ -52,67 +46,16 @@ class GraphExplorer:
             provider: LLM provider ("openai", "local", or "auto" for automatic selection)
             model: Model name (auto-selected if None)
         """
-        self.provider = provider
-        self.model = model
+        # Use the unified provider system
+        self.llm_provider = LLMProviderFactory.create(
+            provider=provider,
+            model=model,
+            temperature=0.1  # Lower temperature for more consistent schema analysis
+        )
         
-        # Auto-select provider and model based on availability
-        if provider == "auto":
-            if torch.cuda.is_available() and HF_AVAILABLE:
-                self.provider = "local"
-                self.model = self.model or "meta-llama/Llama-3.1-8B-Instruct"
-                print(f"🚀 Using local GPU inference with {self.model}")
-            else:
-                self.provider = "openai"
-                self.model = self.model or "gpt-4"
-                print(f"☁️ Using OpenAI API with {self.model}")
-        elif provider == "local":
-            self.model = self.model or "meta-llama/Llama-3.1-8B-Instruct"
-            print(f"🚀 Using local GPU inference with {self.model}")
-        elif provider == "openai":
-            self.model = self.model or "gpt-4"
-            print(f"☁️ Using OpenAI API with {self.model}")
-        
-        if self.provider == "openai":
-            self.llm = ChatOpenAI(model=self.model, temperature=0)
-        elif self.provider == "local":
-            if not HF_AVAILABLE:
-                raise ValueError("HuggingFace transformers not available. Install with: pip install transformers torch")
-            if not torch.cuda.is_available():
-                raise ValueError("CUDA not available. Local inference requires GPU.")
-            self.llm = self._setup_local_llm()
-        else:
-            raise ValueError(f"Unsupported provider: {self.provider}")
+        logger.info(f"Initialized GraphExplorer with {self.llm_provider.get_model_name()}")
         
         self.parser = PydanticOutputParser(pydantic_object=GraphSchema)
-    
-    def _setup_local_llm(self):
-        """Setup local HuggingFace LLM pipeline."""
-        print(f"🔄 Loading {self.model} for local inference...")
-        
-        # Load tokenizer and model
-        tokenizer = AutoTokenizer.from_pretrained(self.model)
-        model = AutoModelForCausalLM.from_pretrained(
-            self.model,
-            torch_dtype=torch.float16,
-            device_map="auto",
-            trust_remote_code=True
-        )
-        
-        # Create pipeline
-        pipe = pipeline(
-            "text-generation",
-            model=model,
-            tokenizer=tokenizer,
-            max_new_tokens=1024,
-            temperature=0.1,
-            do_sample=True,
-            return_full_text=False
-        )
-        
-        # Wrap in LangChain
-        llm = HuggingFacePipeline(pipeline=pipe)
-        print(f"✅ Local model loaded successfully")
-        return llm
     
     def explore(
         self,
@@ -276,28 +219,33 @@ Sample Data: {samples}
 Analyze these node types:""")
         ])
         
-        llm = self.llm
-        
-        result = llm.invoke(prompt.format_messages(
+        # Convert to dict format for provider
+        messages = []
+        for msg in prompt.format_messages(
             tables=json.dumps([t["name"] for t in tables]),
             samples=json.dumps(samples, default=str)
-        ))
+        ):
+            if hasattr(msg, 'type') and hasattr(msg, 'content'):
+                role = "system" if msg.type == "system" else "user"
+                messages.append({"role": role, "content": msg.content})
+            else:
+                messages.append(msg)
+        
+        # Use provider's structured chat
+        result = self.llm_provider.chat_structured(messages)
         
         try:
-            import re
-            # Handle different response types (ChatOpenAI returns object, HuggingFacePipeline returns string)
-            if hasattr(result, 'content'):
-                content = result.content
+            # Result should already be parsed JSON from structured chat
+            if isinstance(result, dict):
+                return result
+            elif isinstance(result, list) and result:
+                return result[0] if isinstance(result[0], dict) else {}
             else:
-                content = str(result)
-            
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
+                logger.warning(f"Unexpected result type: {type(result)}")
+                return {}
         except Exception as e:
-            raise RuntimeError(f"Failed to parse node batch analysis: {e}")
-        
-        raise RuntimeError("Could not parse LLM response for node analysis")
+            logger.error(f"Failed to process node batch analysis: {e}")
+            return {}
     
     def _analyze_edges_incrementally(self, kuzu_adapter, schema_overview, node_schemas, max_samples) -> Dict[str, Any]:
         """Analyze edge types in batches."""
@@ -384,40 +332,37 @@ Sample Data: {samples}
 Analyze these relationships:""")
         ])
         
-        llm = self.llm
-        
         # Extract edge names from the tables
         edge_names = [t["name"] for t in tables]
         
-        result = llm.invoke(prompt.format_messages(
+        # Convert to dict format for provider
+        messages = []
+        for msg in prompt.format_messages(
             edge_names=json.dumps(edge_names),
             samples=json.dumps(samples, default=str)
-        ))
+        ):
+            if hasattr(msg, 'type') and hasattr(msg, 'content'):
+                role = "system" if msg.type == "system" else "user"
+                messages.append({"role": role, "content": msg.content})
+            else:
+                messages.append(msg)
+        
+        # Use provider's structured chat
+        result = self.llm_provider.chat_structured(messages)
         
         try:
-            import re
-            # Handle different response types
-            if hasattr(result, 'content'):
-                content = result.content.strip()
+            # Result should already be parsed JSON from structured chat
+            if isinstance(result, dict):
+                logger.debug(f"Edge batch analysis returned {len(result)} edge types")
+                return result
+            elif isinstance(result, list) and result:
+                return result[0] if isinstance(result[0], dict) else {}
             else:
-                content = str(result).strip()
-            print(f"DEBUG: LLM response for edge batch: {content[:500]}...")
-            
-            # Try to find the complete JSON object in the response (including nested objects)
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                json_str = json_match.group()
-                print(f"DEBUG: Extracted JSON length: {len(json_str)} chars")
-                print(f"DEBUG: Extracted JSON start: {json_str[:200]}...")
-                return json.loads(json_str)
-            else:
-                # If no JSON found, try parsing the entire content as JSON
-                print(f"DEBUG: No JSON object found, trying to parse entire content as JSON")
-                return json.loads(content)
+                logger.warning(f"Unexpected edge result type: {type(result)}")
+                return {}
         except Exception as e:
-            print(f"ERROR: Failed to parse JSON for edge batch: {e}")
-            print(f"ERROR: Full LLM response: {content}")
-            raise RuntimeError(f"Failed to parse edge batch analysis. LLM did not return valid JSON format. Error: {e}")
+            logger.error(f"Failed to process edge batch analysis: {e}")
+            return {}
     
     def _synthesize_final_schema(self, schema_overview, node_schemas, edge_schemas) -> Dict[str, Any]:
         """Synthesize final comprehensive schema."""
@@ -440,21 +385,23 @@ Key relationship categories: {edge_categories}
 Create a summary of this knowledge graph:""")
         ])
         
-        llm = self.llm
-        
-        result = llm.invoke(prompt.format_messages(
+        # Convert to dict format for provider
+        messages = []
+        for msg in prompt.format_messages(
             overview=f"Total nodes: {schema_overview.get('total_nodes', 0)}, Total edges: {schema_overview.get('total_edges', 0)}",
             num_nodes=len(node_schemas),
             num_edges=len(edge_schemas),
             node_types=list(node_schemas.keys()),
             edge_categories=list(set(edge_name.split('_')[0] for edge_name in edge_schemas.keys()))
-        ))
+        ):
+            if hasattr(msg, 'type') and hasattr(msg, 'content'):
+                role = "system" if msg.type == "system" else "user"
+                messages.append({"role": role, "content": msg.content})
+            else:
+                messages.append(msg)
         
-        # Extract summary from result (handle different response types)
-        if hasattr(result, 'content'):
-            summary = result.content
-        else:
-            summary = str(result)
+        # Use regular chat for summary (not structured)
+        summary = self.llm_provider.chat(messages)
         
         return {
             "summary": summary.strip(),

@@ -21,19 +21,26 @@ class DataGenerator(DataGeneratorInterface):
     
     def __init__(
         self,
-        llm_provider: str = "openai",
-        llm_model: str = "gpt-4"
+        llm_provider: str = "auto",
+        llm_model: Optional[str] = None
     ):
         """Initialize data generator.
         
         Args:
-            llm_provider: LLM provider for generation
-            llm_model: Model name for generation
+            llm_provider: LLM provider ("openai", "local", or "auto")
+            llm_model: Model name (optional, auto-selected if None)
         """
         self.llm_provider = llm_provider
         self.llm_model = llm_model
-        self.question_gen = LLMQuestionGen(llm_provider, llm_model)
+        
+        # Pass provider and model to QuestionGenerator
+        self.question_gen = LLMQuestionGen(
+            llm_provider=llm_provider,
+            llm_model=llm_model
+        )
         self.dataset_builder = DatasetBuilder()
+        
+        logger.info(f"Initialized DataGenerator with provider: {llm_provider}, model: {llm_model}")
     
     def validate_inputs(self, **kwargs) -> bool:
         """Validate input parameters."""
